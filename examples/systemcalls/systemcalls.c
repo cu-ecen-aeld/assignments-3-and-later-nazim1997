@@ -69,14 +69,12 @@ bool do_exec(int count, ...)
 
     if (pid == 0) {
         execv(command[0], command);
-        printf("value of child process id is : %d\n", getpid());
         exit(1);
     }
     else {
         // wait(NULL);
         int status;
         waitpid(pid, &status, 0);
-        printf("value of pid is %d and status is %d\n", pid, status);
         if(WEXITSTATUS(status) == 0) {
             return true;
         }
@@ -128,16 +126,26 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     }
     if (pid == 0) {
         if (dup2(fd, 1) < 0) {
-            return false;
+            exit(1);
         }
         close(fd);
         execv(command[0], command);
-        return false;
+        exit(1);
     }
     else {
+        int status;
+        waitpid(pid, &status, 0);
         close(fd);
+        waitpid(pid, &status, 0);
+        if(WEXITSTATUS(status) == 0) {
+            return true;
+        }
+        else {
+            return false;
+        }
+
     }
     va_end(args);
 
-    return true;
+    // return true;
 }
