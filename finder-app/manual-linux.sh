@@ -35,6 +35,7 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
 
   # TODO: Add your kernel build steps here
   cd ${OUTDIR}/linux-stable/
+  make -j 4 ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE mrproper
   make -j 4 ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE defconfig
   make -j 4 ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE Image
   cp arch/arm64/boot/Image ${OUTDIR}
@@ -50,7 +51,7 @@ if [ -d "${OUTDIR}/rootfs" ]; then
 fi
 
 # TODO: Create necessary base directories
-mkdir -p ${OUTDIR}/rootfs/{bin,dev,etc,home,lib,proc,sbin,sys,tmp,usr,var}
+mkdir -p ${OUTDIR}/rootfs/{bin,dev,etc,home,lib,lib64,proc,sbin,sys,tmp,usr,var}
 mkdir ${OUTDIR}/rootfs/usr/{bin,lib,sbin}
 mkdir ${OUTDIR}/rootfs/var/log
 tree -d ${OUTDIR}/rootfs
@@ -82,9 +83,10 @@ ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 
 # TODO: Add library dependencies to rootfs
 export ARM_SYSROOT=$(aarch64-none-linux-gnu-gcc -print-sysroot)
-sudo cp -a $ARM_SYSROOT/lib64/libm.so.6 lib
-sudo cp -a $ARM_SYSROOT/lib64/libresolv.so.2 lib
-sudo cp -a $ARM_SYSROOT/lib64/libc.so.6 lib
+sudo cp -a $ARM_SYSROOT/lib/ld-linux-aarch64.so.1 lib
+sudo cp -a $ARM_SYSROOT/lib64/libm.so.6 lib64
+sudo cp -a $ARM_SYSROOT/lib64/libresolv.so.2 lib64
+sudo cp -a $ARM_SYSROOT/lib64/libc.so.6 lib64
 # TODO: Make device nodes
 sudo mknod -m 666 dev/null c 1 3
 sudo mknod -m 600 dev/console c 5 1
