@@ -1,6 +1,5 @@
 #!/bin/bash
 # Script outline to install and build kernel.
-# Author: Siddhant Jajoo.
 
 set -e
 set -u
@@ -13,6 +12,7 @@ FINDER_APP_DIR=$(realpath $(dirname $0))
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
 
+
 if [ $# -lt 1 ]
 then
 	echo "Using default directory ${OUTDIR} for output"
@@ -21,7 +21,14 @@ else
 	echo "Using passed directory ${OUTDIR} for output"
 fi
 
-mkdir -p ${OUTDIR}
+#define own path variables
+root_dir="${OUTDIR}/rootfs"
+
+if [ ! -d $OUTDIR ]
+then
+    mkdir -p $OUTDIR
+
+fi
 
 cd "$OUTDIR"
 if [ ! -d "${OUTDIR}/linux-stable" ]; then
@@ -34,17 +41,22 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     echo "Checking out version ${KERNEL_VERSION}"
     git checkout ${KERNEL_VERSION}
 
-    # Done: Add your kernel build steps here
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
-    make ARCH=${ARCH} -j 16 CROSS_COMPILE=${CROSS_COMPILE} all
-#    make ARCH=${ARCH} -j 16 CROSS_COMPILE=${CROSS_COMPILE} dtbs
 
+    echo "apply patch"
+    curl https://github.com/torvalds/linux/commit/e33a814e772cdc36436c8c188d8c42d019fda639.patch > /tmp/lin.patch
+    git apply /tmp/lin.patch
+
+    # TODO: Add your kernel build steps here
+
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- mrproper
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- defconfig
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- all -j 6
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- modules
+    make ARCH=arm64 CROSS_COMPILE=aarch64-none-linux-gnu- dtbs
 fi
 
 echo "Adding the Image in outdir"
-# here was a todo missing.
-cp ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ${OUTDIR}/.
+cp ${OUTDIR}/linux-stable/arch/arm64/boot/Image ${OUTDIR}/Image
 
 echo "Creating the staging directory for the root filesystem"
 cd "$OUTDIR"
@@ -54,11 +66,13 @@ then
     sudo rm  -rf ${OUTDIR}/rootfs
 fi
 
-# Done: Create necessary base directories
-mkdir -p ${OUTDIR}/rootfs
-cd ${OUTDIR}/rootfs
-mkdir -p bin dev etc home lib lib64 proc sbin sys tmp usr var
-mkdir -p usr/bin usr/lib usr/sbin var/log
+# TODO: Create necessary base directories
+
+cd ${root_dir}
+
+mkdir -p bin dev etc home lib lib64 proc sbin  sys tmp usr var
+mkdir -p usr/bin usr/lib usr/sbin 
+mkdir -p var/log
 
 
 cd "$OUTDIR"
@@ -67,52 +81,67 @@ then
 git clone git://busybox.net/busybox.git
     cd busybox
     git checkout ${BUSYBOX_VERSION}
-    # Done:  Configure busybox
+    # TODO:  Configure busybox
+
     make distclean
     make defconfig
 else
     cd busybox
 fi
-echo $PWD
-# Done: Make and install busybox
-make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
-make CONFIG_PREFIX=${OUTDIR}/rootfs ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
-cd ${OUTDIR}/rootfs
+
+
+# TODO: Make and install busybox
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j 4
+
+make CONFIG_PREFIX=${root_dir} ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
+cd ${root_dir}
+
 echo "Library dependencies"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "program interpreter"
 ${CROSS_COMPILE}readelf -a bin/busybox | grep "Shared library"
 
-# Done: Add library dependencies to rootfs
-TOOLCHAIN_SYSROOT=$(${CROSS_COMPILE}gcc -print-sysroot)
-echo "Copying from toolchain sysroot at $TOOLCHAIN_SYSROOT ..."
-cp -a $TOOLCHAIN_SYSROOT/lib/ld-linux-aarch64.so.1 lib
-cp -a $TOOLCHAIN_SYSROOT/lib64/libm.so.6 lib64
-cp -a $TOOLCHAIN_SYSROOT/lib64/libresolv.so.2 lib64
-cp -a $TOOLCHAIN_SYSROOT/lib64/libc.so.6 lib64
 
-# Done: Make device nodes
+# TODO: Add library dependencies to rootfs
+
+#copy shared libraries from the aarch64 toolchain
+gcc-path=$(which aarch64-none-linux-gnu-gcc)
+lib-path = gcc-path/../../libc
+
+cp -r lib64/* ${root_dir}/lib64
+cp -r lib/* ${root_dir}/lib
+
+
+# TODO: Make device nodes
+ 
 sudo mknod -m 666 dev/null c 1 3
-sudo mknod -m 600 dev/console c 5 1
+sudo mknod -m 600 dev/console c 5 1 
 
-# Done: Clean and build the writer utility
-cd $FINDER_APP_DIR
+sudo mknod -m 600 dev/tty c 5 0  #handle tty not found message
+
+
+
+# TODO: Clean and build the writer utility
+cd ${FINDER_APP_DIR}
 make clean
-make CROSS_COMPILE=$CROSS_COMPILE
+make CROSS_COMPILE
 
-# Done: Copy the finder related scripts and executables to the /home directory
+
+# TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
-cp finder* ${OUTDIR}/rootfs/home/.
-cp writer ${OUTDIR}/rootfs/home/.
-cp -r ../conf ${OUTDIR}/rootfs/home/conf
-cp autorun-qemu.sh ${OUTDIR}/rootfs/home/.
+cp writer ${root_dir}/home/
+cp finder.sh ${root_dir}/home/
+cp finder-test.sh ${root_dir}/home/
+cp -r conf/ ${root_dir}/home/
+cp autorun-qemu.sh ${root_dir}/home/
 
-# TODO: Chown the root directory //@authors, I'm assuming chown it to the root user? (I wish you were'nt this vague.)
-cd ${OUTDIR}
-#chown -R root:root rootfs
-## I wonder if chown for rootfs was necessary if the compressed is chowned anyway
 
-# Done: Create initramfs.cpio.gz
-cd rootfs
-find . | cpio -H newc -ov --owner root:root > ../initramfs.cpio
-cd ..
-gzip -f initramfs.cpio
+
+# TODO: Chown the root directory
+cd ${root_dir}
+sudo chown -R root:root *
+
+sudo chmod -R a+rwx * #allow the deletion of rootfs through non-root users
+
+# TODO: Create initramfs.cpio.gz
+find . | cpio -H newc -ov --owner root:root > ${OUTDIR}/initramfs.cpio
+gzip -f ${OUTDIR}/initramfs.cpio
