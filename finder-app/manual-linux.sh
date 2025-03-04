@@ -74,6 +74,10 @@ if [ ! -d "${OUTDIR}/busybox" ]; then
   make -j${NPROC} ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} install
 else
   cd busybox
+  make distclean
+  make defconfig
+  sed -i 's/CONFIG_TC=y/CONFIG_TC=n/' .config
+  sed -i 's|CONFIG_PREFIX="./_install"|CONFIG_PREFIX="../rootfs"|' .config
   echo "here 2"
   make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
   echo "here 3"
