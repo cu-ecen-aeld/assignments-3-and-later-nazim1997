@@ -1,10 +1,13 @@
-# CROSS_COMPILE ?= aarch64-none-linux-gnu-
-CROSS_COMPILE ?=
+CC := gcc
 
+SRC := writer.c
+TARGET = writer
 
-writer: writer.c
-	$(CROSS_COMPILE)gcc -c writer.c -o writer.o
-	$(CROSS_COMPILE)gcc writer.o -o writer    
+all: $(TARGET).o
+	$(CROSS_COMPILE)$(CC) -o $(TARGET) $(TARGET).o
+
+$(TARGET).o : $(SRC)
+	$(CROSS_COMPILE)$(CC) $(CFLAGS) $(INCLUDES) $(OBJS) -c $(SRC) $(LDFLAGS)
 
 clean:
-	rm -f writer writer.o
+	-rm -f *.o $(TARGET) *.elf *.map

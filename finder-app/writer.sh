@@ -1,31 +1,38 @@
 #!/bin/bash
 
 writefile=$1
-writestr=$2
 
-if [ $# -ne 2 ]
-then
-    echo "Error: You must provide two arguments: <writefile> and <writestr>"
-    exit 1
-fi
-
+# Extract directory file filename path
 writedir=$(dirname "$writefile")
 
-if [ ! -d "$writedir" ]
+writestr=$2
+
+# Check if directory specified
+if [ -z $writefile ]
 then
-    mkdir -p "$writedir"
-    if [ $? -ne 0 ]
-    then
-        echo "Error: Could not create directory $writedir"
-        exit 1
-    fi
+	echo "Error: directory not specified"
+	exit 1
 fi
 
-echo "$writestr" > "$writefile"
-if [ $? -ne 0 ]
+# Check if search string specified
+if [ -z $writestr ]
 then
-    echo "Error: Could not write to file $writefile"
-    exit 1
+	echo "Error: write string not specified"
+	exit 1
 fi
 
-exit 0
+# Create directory if it doesnt already exist
+if [ ! -d $writedir ] 
+then
+	mkdir -p $writedir
+fi
+
+# Write string to file
+echo $writestr > $writefile
+
+if [ ! -e $writefile ]
+then
+	echo "Error: unable to create file and or directory"
+	exit 1
+fi
+

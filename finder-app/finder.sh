@@ -1,24 +1,47 @@
-#!/bin/bash
+#!/bin/sh
 
 filesdir=$1
+
 searchstr=$2
 
-if [ $# -ne 2 ]
+# Check if directory specified
+if [ -z $filesdir ]
 then
-    echo "Error: You must provide two arguments: <filesdir> and <searchstr>"
-    exit 1
+	echo "Error: directory not specified"
+	exit 1
 fi
 
-if [ ! -d "$filesdir" ]
+# Check if search string specified
+if [ -z $searchstr ]
 then
-    echo "Error: $filesdir is not a valid directory or does not exist."
-    exit 1
+	echo "Error: search string not specified"
+	exit 1
 fi
 
-x=$(find "$filesdir" -type f | wc -l)
+# Check if file specified exists
+if [ ! -d $filesdir ]
+then
+	echo "Error: directory does not exist"
+	exit 1
+fi
 
-y=$(find "$filesdir" -type f -print0 | xargs -0 grep -s "$searchstr" | wc -l)
+# Variables for saving line and file counts
+num_lines=0
+num_files=0
 
-echo "The number of files are $x and the number of matching lines are $y"
+# Loop through each file in specified directory
+for file in "$filesdir"/*
+do
+	# Check file is not a directory
+	if [ ! -d $file ]
+	then
+		# Save total line matches
+		num_lines=$((num_lines+$(grep -c $searchstr $file)))
+		
+		# Increment total file match count
+		num_files=$((num_files+1))
+	fi
+done
 
-exit 0
+echo "The number of files are $num_files and the number of matching lines are $num_lines."
+

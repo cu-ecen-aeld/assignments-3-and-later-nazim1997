@@ -1,4 +1,11 @@
 #include "systemcalls.h"
+#include <stdlib.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <syslog.h>
 
 /**
  * @param cmd the command to execute with system()
@@ -16,9 +23,13 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-    if (system(cmd) != 0)
+    
+    int status = system(cmd);
+
+    if(status == -1)
         return false;
-    return true;
+    else
+        return true;
 }
 
 /**
@@ -44,13 +55,12 @@ bool do_exec(int count, ...)
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
-
     }
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
     command[count] = command[count];
-    
+
 /*
  * TODO:
  *   Execute a system command by calling fork, execv(),
@@ -61,30 +71,49 @@ bool do_exec(int count, ...)
  *
 */
 
-    int pid = fork();
-
-    if (pid < 0) {
-       return false; 
-    }
-
-    if (pid == 0) {
-        execv(command[0], command);
-        exit(1);
-    }
-    else {
-        // wait(NULL);
-        int status;
-        waitpid(pid, &status, 0);
-        if(WEXITSTATUS(status) == 0) {
-            return true;
-        }
-        else {
-            return false;
-        }
-    }
     va_end(args);
+    
+    int status;
+    pid_t cpid;
+    
+    cpid = fork();
 
-    // return true;
+    syslog(LOG_DEBUG, "cpid: %d", cpid);
+
+    if(cpid < 0){
+        syslog(LOG_DEBUG, "fork error");
+        return false;
+    }
+    else if(cpid == 0){
+        syslog(LOG_DEBUG, "start of child");
+
+        int rtn;
+        // Referenced GitHub "comerts" use of command for the arguments
+        // https://github.com/cu-ecen-aeld/assignments-3-and-later-comerts/blob/00892f35d9265e24e3e5aa35d37dea972a18ded5/examples/systemcalls/systemcalls.c
+        rtn = execv(command[0], command);
+        syslog(LOG_DEBUG, "child execv return: %d", rtn);
+        return rtn;
+    }
+    else{
+        cpid = wait(&status);
+
+        if(cpid == -1)
+            return false;
+
+        int return_status;
+
+        if(WIFEXITED (status)){
+            return_status = WEXITSTATUS (status);
+            syslog(LOG_DEBUG, "exit status: %d", return_status);
+        }
+        if(return_status == 0){
+            syslog(LOG_DEBUG, "func() return true");
+            return true;}
+        else{
+            syslog(LOG_DEBUG, "func() return false");
+            return false;}
+            
+    }
 }
 
 /**
@@ -107,8 +136,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     // and may be removed
     command[count] = command[count];
 
-    // printf("")
-
 
 /*
  * TODO
@@ -117,35 +144,59 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
-    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
-        
-    int pid = fork();
 
-    if (pid < 0) {
-        return false;
-    }
-    if (pid == 0) {
-        if (dup2(fd, 1) < 0) {
-            exit(1);
-        }
-        close(fd);
-        execv(command[0], command);
-        exit(1);
-    }
-    else {
-        int status;
-        waitpid(pid, &status, 0);
-        close(fd);
-        waitpid(pid, &status, 0);
-        if(WEXITSTATUS(status) == 0) {
-            return true;
-        }
-        else {
-            return false;
-        }
-
-    }
     va_end(args);
 
-    // return true;
+    int status, fd;
+    pid_t cpid;
+
+    fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if(fd < 0)
+        return false; 
+
+    cpid = fork();
+
+    syslog(LOG_DEBUG, "cpid: %d", cpid);
+
+    if(cpid < 0){
+        syslog(LOG_DEBUG, "fork error");
+        return false;
+    }
+    else if(cpid == 0){
+        syslog(LOG_DEBUG, "start of child");
+
+        int rtn;
+        
+        if(dup2(fd, 1) < 0)
+            return -1;
+        close(fd);
+        
+        // Referenced GitHub "comerts" use of command for the arguments
+        // https://github.com/cu-ecen-aeld/assignments-3-and-later-comerts/blob/00892f35d9265e24e3e5aa35d37dea972a18ded5/examples/systemcalls/systemcalls.c
+        rtn = execv(command[0], command);
+        syslog(LOG_DEBUG, "child execv return: %d", rtn);
+        return rtn;
+    }
+    else{
+        cpid = wait(&status);
+
+        if(cpid == -1)
+            return false;
+
+        close(fd);
+
+        int return_status;
+
+        if(WIFEXITED (status)){
+            return_status = WEXITSTATUS (status);
+            syslog(LOG_DEBUG, "exit status: %d", return_status);
+        }
+        if(return_status == 0){
+            syslog(LOG_DEBUG, "func() return true");
+            return true;}
+        else{
+            syslog(LOG_DEBUG, "func() return false");
+            return false;}
+            
+    }
 }
