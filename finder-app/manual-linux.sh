@@ -104,8 +104,8 @@ make -j${NPROC}  ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE}
 # TODO: Copy the finder related scripts and executables to the /home directory
 # on the target rootfs
 
-cp writer /tmp/aeld/rootfs/home/
-cp *.sh /tmp/aeld/rootfs/home/
+cp writer ${OUTDIR}/rootfs/home/
+cp *.sh ${OUTDIR}/rootfs/home/
 mkdir "$OUTDIR/rootfs/home/conf"
 
 cp "$FINDER_APP_DIR/conf/username.txt" "$OUTDIR/rootfs/home/conf"
