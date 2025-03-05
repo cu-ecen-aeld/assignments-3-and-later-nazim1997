@@ -64,7 +64,7 @@ if [ ! -d "${OUTDIR}/busybox" ]; then
   git config --global core.compression 0
   git clone --depth 1 git://busybox.net/busybox.git
   cd busybox
-  git checkout ${BUSYBOX_VERSION}
+  #git checkout ${BUSYBOX_VERSION}
   # TODO:  Configure busybox
   make distclean
   make defconfig
