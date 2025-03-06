@@ -45,7 +45,6 @@ then
 	else
 		exit 1
 	fi
-	echo "here 3"
 fi
 #echo "Removing the old writer utility and compiling as a native application"
 #make clean
