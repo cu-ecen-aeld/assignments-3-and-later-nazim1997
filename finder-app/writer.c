@@ -1,58 +1,44 @@
-#include <stdio.h>
-
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <string.h>
+#include <stdio.h>
+#include <syslog.h> 
+#include <unistd.h>
 
-#include <syslog.h>
 
-int main(int argc, char *argv[]){
-    
-    openlog(NULL,0,LOG_USER);
+int main(int argc, char *argv[])
+{
+    int fileFd;
+    size_t numRead;
 
-    // First argument is file path, assumed created
-    // Second argument is string to write to file specified by path
-    
+    openlog(NULL, 0, LOG_USER);
 
-    // Error and exit if any parameters not specified
-    // LOG_ERROR
-    if(argc < 2){
-        syslog(LOG_ERR, "Invalid number of arguments: %d", argc);
-        
-        closelog();
-
+    if (argc != 3 || strcmp(argv[1], "--help") == 0) {
+        printf("you should provide two arguments\n");
+        syslog(LOG_ERR, "you should provide two arguments");
         return 1;
     }
 
-    int fd;
+    fileFd = open(argv[1], O_WRONLY);
 
-    fd = creat(argv[1], 0644);
-    
-    if (fd == -1){
-        syslog(LOG_ERR, "Unable to create file: %s", argv[1]);
-        closelog();
-
+    if (fileFd == -1) {
+        printf("error opening file %s\n", argv[1]);
+        syslog(LOG_ERR, "error opening file %s", argv[1]);
         return 1;
     }
 
-    ssize_t nr;
-    nr = write(fd, argv[2], strlen(argv[2]));
+    printf("buffer is  %s\n", argv[2]);
 
-    if (nr == -1){
-        syslog(LOG_ERR, "Unable to write to file: %s", argv[1]);
-        closelog();
+    numRead = write(fileFd, argv[2], strlen(argv[2]));
 
-        close(fd);
-
+    if(numRead < 0) {
+        printf("error writing to file %s\n", argv[1]);
+        syslog(LOG_ERR, "error writing to file %s", argv[1]);
         return 1;
     }
 
-    syslog(LOG_DEBUG, "Writing %s to %s", argv[2], argv[1]);
-    closelog();
-    close(fd);
+    syslog(LOG_DEBUG ,  "Writing %s to %s", argv[2], argv[1]);
 
-
+    printf("numRead is   %ld\n", numRead);
+    close(fileFd);
     return 0;
 }
