@@ -22,11 +22,12 @@ void listening(int fd) {
   for (;;) {
     bzero(buffer, MAX);
 
-    read(fd, buffer, strlen(buffer));
+    while(read(fd, buffer, sizeof(buffer)) > 0) {
 
-    write(aesdsocketdata_fd, buffer, strlen(buffer));
+        write(aesdsocketdata_fd, buffer, sizeof(buffer));
 
-    write(fd, buffer, strlen(buffer));
+        write(fd, buffer, sizeof(buffer));
+    }
   }
 }
 
@@ -45,7 +46,7 @@ int main() {
   server_address.sin_port = htons(9000);
   server_address.sin_addr.s_addr = htonl(INADDR_ANY);
 
-  if (bind(sockfd, (struct sockaddr )&server_address, sizeof(server_address)) == -1) {
+  if (bind(sockfd, (struct sockaddr* )&server_address, sizeof(server_address)) == -1) {
     perror("binding failed\n");
     exit(1);
   }
@@ -57,7 +58,7 @@ int main() {
 
   socklen_t client_address_length = sizeof(client_address);
 
-  int connfd = accept(sockfd, (struct sockaddr)&client_address, &client_address_length);
+  int connfd = accept(sockfd, (struct sockaddr*)&client_address, &client_address_length);
 
   if (connfd < 0) {
       perror("server accepted failed");
