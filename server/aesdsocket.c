@@ -52,11 +52,13 @@ void handle_client(int connfd) {
     close(connfd);
 }
 
-int main() {
+int main(int argc, char **argv) {
     int sockfd, connfd;
     struct sockaddr_in server_address, client_address;
     socklen_t client_len;
     struct sigaction sa;
+    int daemon_mode = 0;
+    int c;
 
     // Set up signal handling
     memset(&sa, 0, sizeof(sa));
@@ -89,6 +91,27 @@ int main() {
         perror("listen failed");
         close(sockfd);
         exit(EXIT_FAILURE);
+    }
+
+    
+    while ((c = getopt(argc, argv, "d")) != -1) {
+      if (c == 'd') daemon_mode = 1;
+    }
+
+    if (daemon_mode == 1) {
+      int pid = fork();
+
+      if (pid < 0) {
+        perror("fork failed\n");
+        exit(EXIT_FAILURE);
+      }
+      else if (pid == 0) {
+        printf("starting daemon process\n");
+        setsid();
+      }
+      else {
+        exit(0);
+      }
     }
 
     // Main server loop
