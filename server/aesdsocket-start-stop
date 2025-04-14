@@ -1,0 +1,19 @@
+#!/bin/bash
+
+case "$1" in
+start)
+  echo "Starting daemon process aesdsocket"
+  start-stop-daemon -S -n aesdsocket -a /home/nazim/learning/Embedded_Linux_CU/assignments-3-and-later-nazim1997/server/aesdsocket -- -d
+  ;;
+stop)
+  echo "Stopping daemon process aesdsocket"
+  start-stop-daemon -K -n aesdsocket
+  rm -rf /var/tmp/aesdsocketdata
+  ;;
+*)
+  echo "Usage: $0 {start|stop}"
+  exit 1
+  ;;
+esac
+
+exit 0
