@@ -62,7 +62,6 @@ void* handle_client(void* args) {
     }
     
 
-    close(aesdsocketdata_fd);
     close(connfd);
     pthread_exit(NULL);
 }
@@ -178,9 +177,6 @@ int main(int argc, char **argv) {
         free(node);
     }
 
-    if (aesdsocketdata_fd != -1) {
-        close(aesdsocketdata_fd);
-    }
     unlink("/var/tmp/aesdsocketdata");
     syslog(LOG_INFO, "Caught signal, exiting");
     
