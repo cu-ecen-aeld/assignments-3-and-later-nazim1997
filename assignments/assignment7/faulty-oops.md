@@ -45,4 +45,6 @@ Code: d2800001 d2800000 d503233f d50323bf (b900003f)
 ```
 
 # Analysis
-
+- The oops messages indicate that the error occured in module faulty
+- 16 bytes into the function faulty_write, which is 0x20 bytes long
+- in function faulty_write the program tries to access a forbidded memory location which is 0x0, and this memory location is not allocated, so accessing it (derefrencing it) will cause the program to crash.
