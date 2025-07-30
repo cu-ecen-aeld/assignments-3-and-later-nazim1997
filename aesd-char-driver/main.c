@@ -18,6 +18,8 @@
 #include <linux/cdev.h>
 #include <linux/fs.h> // file_operations
 #include "aesdchar.h"
+#include "aesd-circular-buffer.h"
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -26,12 +28,22 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
 
+struct incomplete_command {
+    char *buffer;
+    size_t size;
+};
+
 int aesd_open(struct inode *inode, struct file *filp)
 {
     PDEBUG("open");
     /**
      * TODO: handle open
      */
+    filp->private_data = kmalloc(sizeof(incomplete_command), GFP_KERNEL);
+    struct incomplete_command *cmd = kmalloc(sizeof(incomplete_command));
+    cmd->buffer = NULL;
+    cmd->size = 0;
+    filp->private_data = cmd;
     return 0;
 }
 
@@ -63,8 +75,55 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     /**
      * TODO: handle write
      */
+    char *kernel_buf = kmalloc(count, GFP_KERNEL);
+    struct incomplete_command *cmd = (struct incomplete_command *) filp->private_data;
+
+    if (!kernel_buf) {
+        PDEBUG("Failed to allocate kernel buffer");
+        return -ENOMEM;
+    }
+
+    if ( copy_from_user(kernel_buf, buf, count)) {
+        PDEBUG("Failed to copy buf user space to kernel buffer");
+        return -EFAULT;
+    }
+    
+    if ( memchr(kernel_buf, '\n', count)) {
+        struct aesd_buffer_entry entry;
+        if (cmd->buffer) {
+            entry.buffptr = kmalloc((cmd->size + count) * sizeof(char), GFP_KERNEL);
+            memcpy(entry.buffptr, cmd->buffer, cmd->size);
+            memcpy(entry.buffptr + cmd->size, kernel_buf, count);
+            entry.size = cmd->size + count;
+            kfree(cmd->buffer);
+            cmd->buffer = NULL;
+            cmd->size = 0;
+            kfree(kernel_buf); 
+        }
+        else {
+            entry.buffptr = kernel_buf;
+            entry.size = count;
+        }
+        aesd_circular_buffer_add_entry(aesd_device.buffer, &entry);
+        return entry.size;
+    }
+    else {
+        if (cmd->buffer) {
+            cmd->buffer = krealloc(cmd->buffer, cmd->size + count, GFP_KERNEL);
+            memcpy(cmd->buffer + cmd->size, kernel_buf, count);
+            cmd->size += count;
+        }
+        else {
+            cmd->buffer = kmalloc(count, GFP_KERNEL);
+            memcpy(cmd->buffer, kernel_buf, count);
+            cmd->size = count;
+        }
+        kfree(kernel_buf);
+        return cmd->size;
+    }
     return retval;
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -105,6 +164,7 @@ int aesd_init_module(void)
     /**
      * TODO: initialize the AESD specific portion of the device
      */
+    aesd_device.buffer = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
 
     result = aesd_setup_cdev(&aesd_device);
 
