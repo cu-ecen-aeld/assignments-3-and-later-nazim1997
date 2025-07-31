@@ -20,6 +20,8 @@
 #include "aesdchar.h"
 #include "aesd-circular-buffer.h"
 
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -64,6 +66,31 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
     /**
      * TODO: handle read
      */
+    struct aesd_buffer_entry *entry;
+    size_t entry_offset_byte_rtn;
+
+    mutex_lock(&aesd_device.device_lock);
+    entry = aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device.buffer,
+            f_pos, &entry_offset_byte_rtn);
+
+    if (entry) {
+        size_t available_bytes = entry->size - entry_offset_byte_rtn;
+        size_t copied_bytes = copy_to_user(buf, entry->buffptr + entry_offset_byte_rtn, MIN(count, available_bytes));
+        if (copied_bytes != 0) {
+            mutex_unlock(&aesd_device.device_lock);
+            return -EFAULT;
+        }
+        else {
+            *f_pos += MIN(count, available_bytes);
+            retval = MIN(count, available_bytes);
+        }
+        
+    }
+    else {
+        mutex_unlock(&aesd_device.device_lock);
+        return -EINVAL;
+    }
+    mutex_unlock(&aesd_device.device_lock);
     return retval;
 }
 
@@ -75,16 +102,19 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
     /**
      * TODO: handle write
      */
+    mutex_lock(&aesd_device.device_lock);
     char *kernel_buf = kmalloc(count, GFP_KERNEL);
     struct incomplete_command *cmd = (struct incomplete_command *) filp->private_data;
 
     if (!kernel_buf) {
         PDEBUG("Failed to allocate kernel buffer");
+        mutex_unlock(&aesd_device.device_lock);
         return -ENOMEM;
     }
 
     if ( copy_from_user(kernel_buf, buf, count)) {
         PDEBUG("Failed to copy buf user space to kernel buffer");
+        mutex_unlock(&aesd_device.device_lock);
         return -EFAULT;
     }
     
@@ -105,6 +135,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             entry.size = count;
         }
         aesd_circular_buffer_add_entry(aesd_device.buffer, &entry);
+        mutex_unlock(&aesd_device.device_lock);
         return entry.size;
     }
     else {
@@ -119,8 +150,11 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
             cmd->size = count;
         }
         kfree(kernel_buf);
+        mutex_unlock(&aesd_device.device_lock);
         return cmd->size;
     }
+        
+    mutex_unlock(&aesd_device.device_lock);
     return retval;
 }
 
@@ -165,6 +199,7 @@ int aesd_init_module(void)
      * TODO: initialize the AESD specific portion of the device
      */
     aesd_device.buffer = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
+    mutex_init(aesd_device.device_lock);
 
     result = aesd_setup_cdev(&aesd_device);
 
