@@ -20,6 +20,8 @@
 #include "aesdchar.h"
 #include "aesd-circular-buffer.h"
 
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+
 
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
