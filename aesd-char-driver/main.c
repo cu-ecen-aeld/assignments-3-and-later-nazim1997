@@ -20,7 +20,6 @@
 #include "aesdchar.h"
 #include "aesd-circular-buffer.h"
 
-#define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
@@ -41,12 +40,17 @@ int aesd_open(struct inode *inode, struct file *filp)
     /**
      * TODO: handle open
      */
-    filp->private_data = kmalloc(sizeof(incomplete_command), GFP_KERNEL);
-    struct incomplete_command *cmd = kmalloc(sizeof(incomplete_command));
-    cmd->buffer = NULL;
-    cmd->size = 0;
-    filp->private_data = cmd;
-    return 0;
+    struct incomplete_command *cmd = kmalloc(sizeof(struct incomplete_command), GFP_KERNEL);
+    if (cmd) {
+        cmd->buffer = NULL;
+        cmd->size = 0;
+        filp->private_data = cmd;
+        return 0;
+    }
+    else {
+        return -ENOMEM;
+    }
+    
 }
 
 int aesd_release(struct inode *inode, struct file *filp)
@@ -55,6 +59,13 @@ int aesd_release(struct inode *inode, struct file *filp)
     /**
      * TODO: handle release
      */
+    struct incomplete_command *cmd = filp->private_data;
+    if (cmd) {
+        if (cmd->buffer) {
+            kfree(cmd->buffer);
+        }
+        kfree(cmd);
+    }
     return 0;
 }
 
@@ -71,7 +82,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     mutex_lock(&aesd_device.device_lock);
     entry = aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device.buffer,
-            f_pos, &entry_offset_byte_rtn);
+            *f_pos, &entry_offset_byte_rtn);
 
     if (entry) {
         size_t available_bytes = entry->size - entry_offset_byte_rtn;
@@ -199,7 +210,8 @@ int aesd_init_module(void)
      * TODO: initialize the AESD specific portion of the device
      */
     aesd_device.buffer = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
-    mutex_init(aesd_device.device_lock);
+    aesd_circular_buffer_init(aesd_device.buffer);
+    mutex_init(&aesd_device.device_lock);
 
     result = aesd_setup_cdev(&aesd_device);
 
@@ -219,7 +231,13 @@ void aesd_cleanup_module(void)
     /**
      * TODO: cleanup AESD specific poritions here as necessary
      */
-
+    // Freeing entries from circular buffer
+    char index = 0;
+    struct aesd_buffer_entry *entry;
+    AESD_CIRCULAR_BUFFER_FOREACH(entry, aesd_device.buffer, index) {
+        kfree(entry->buffptr);
+    }
+    mutex_destroy(&aesd_device.device_lock);
     unregister_chrdev_region(devno, 1);
 }
 
