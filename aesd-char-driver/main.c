@@ -75,36 +75,40 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = 0;
+    ssize_t total_bytes_read = 0;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle read
-     */
-    struct aesd_buffer_entry *entry;
-    size_t entry_offset_byte_rtn;
-
+    
     mutex_lock(&aesd_device.device_lock);
-    entry = aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device.buffer,
-            *f_pos, &entry_offset_byte_rtn);
-
-    if (entry) {
-        size_t available_bytes = entry->size - entry_offset_byte_rtn;
-        size_t copied_bytes = copy_to_user(buf, entry->buffptr + entry_offset_byte_rtn, MIN(count, available_bytes));
-        if (copied_bytes != 0) {
-            mutex_unlock(&aesd_device.device_lock);
-            return -EFAULT;
-        }
-        else {
-            *f_pos += MIN(count, available_bytes);
-            retval = MIN(count, available_bytes);
+    
+    while (count > 0 && total_bytes_read < count) {
+        struct aesd_buffer_entry *entry;
+        size_t entry_offset_byte_rtn;
+        
+        entry = aesd_circular_buffer_find_entry_offset_for_fpos(aesd_device.buffer,
+                *f_pos, &entry_offset_byte_rtn);
+        
+        if (!entry) {
+            // No more data to read - end of buffer
+            break;
         }
         
+        size_t available_bytes = entry->size - entry_offset_byte_rtn;
+        size_t bytes_to_copy = MIN(count - total_bytes_read, available_bytes);
+        size_t bytes_not_copied = copy_to_user(buf + total_bytes_read, 
+                                             entry->buffptr + entry_offset_byte_rtn, 
+                                             bytes_to_copy);
+        
+        if (bytes_not_copied != 0) {
+            retval = -EFAULT;
+            break;
+        }
+        
+        *f_pos += bytes_to_copy;
+        total_bytes_read += bytes_to_copy;
     }
-    else {
-        mutex_unlock(&aesd_device.device_lock);
-        return -EINVAL;
-    }
+    
     mutex_unlock(&aesd_device.device_lock);
-    return retval;
+    return total_bytes_read > 0 ? total_bytes_read : retval;
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
