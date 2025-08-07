@@ -116,12 +116,17 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 {
     ssize_t retval = -ENOMEM;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
-    /**
-     * TODO: handle write
-     */
+    
     mutex_lock(&aesd_device.device_lock);
     char *kernel_buf = kmalloc(count, GFP_KERNEL);
     struct incomplete_command *cmd = (struct incomplete_command *) filp->private_data;
+
+    if(cmd->buffer) {
+        PDEBUG("CMD BUFFER FULL: previous command is : %s", cmd->buffer);
+    }
+    else {
+        PDEBUG("CMD BUFFER EMPTY : previous command was empty");
+    }
 
     if (!kernel_buf) {
         PDEBUG("Failed to allocate kernel buffer");
@@ -129,46 +134,82 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         return -ENOMEM;
     }
 
-    if ( copy_from_user(kernel_buf, buf, count)) {
+    if (copy_from_user(kernel_buf, buf, count)) {
         PDEBUG("Failed to copy buf user space to kernel buffer");
+        kfree(kernel_buf);
         mutex_unlock(&aesd_device.device_lock);
         return -EFAULT;
     }
-    
-    if ( memchr(kernel_buf, '\n', count)) {
+    PDEBUG("writing string %s to kernel buf", kernel_buf);
+    if (memchr(kernel_buf, '\n', count)) {
+        PDEBUG("a new line detected");
+        // Complete command - add to circular buffer (exclude the newline)
         struct aesd_buffer_entry entry;
+        
         if (cmd->buffer) {
-            entry.buffptr = kmalloc((cmd->size + count) * sizeof(char), GFP_KERNEL);
-            memcpy(entry.buffptr, cmd->buffer, cmd->size);
-            memcpy(entry.buffptr + cmd->size, kernel_buf, count);
-            entry.size = cmd->size + count;
+            PDEBUG("the previous command is not empty and cmd->buffer = %s", cmd->buffer);
+            // Combine accumulated data with current write (excluding newline)
+            entry.buffptr = kmalloc(cmd->size + count - 1, GFP_KERNEL);
+            if (!entry.buffptr) {
+                kfree(kernel_buf);
+                mutex_unlock(&aesd_device.device_lock);
+                return -ENOMEM;
+            }
+            memcpy((void*)entry.buffptr, cmd->buffer, cmd->size);
+            memcpy((void*)entry.buffptr + cmd->size, kernel_buf, count - 1);  // Exclude newline
+            entry.size = cmd->size + count - 1;  // Exclude newline from size
+            
             kfree(cmd->buffer);
             cmd->buffer = NULL;
             cmd->size = 0;
-            kfree(kernel_buf); 
+            kfree(kernel_buf);
         }
         else {
-            entry.buffptr = kernel_buf;
-            entry.size = count;
+            PDEBUG("new line but previous command is empty");
+            // Just current write (excluding newline)
+            entry.buffptr = kmalloc(count - 1, GFP_KERNEL);
+            if (!entry.buffptr) {
+                kfree(kernel_buf);
+                mutex_unlock(&aesd_device.device_lock);
+                return -ENOMEM;
+            }
+            memcpy((void*)entry.buffptr, kernel_buf, count - 1);  // Exclude newline
+            entry.size = count - 1;  // Exclude newline from size
+            kfree(kernel_buf);
         }
+        
         aesd_circular_buffer_add_entry(aesd_device.buffer, &entry);
-        mutex_unlock(&aesd_device.device_lock);
-        return entry.size;
+        
+        retval = count;  // Return bytes from THIS write operation
     }
     else {
+        PDEBUG("THIS IS A INCOMPLETE COMMAND NO NEWLINE DETECTED");
+        // Incomplete command - accumulate data
         if (cmd->buffer) {
-            cmd->buffer = krealloc(cmd->buffer, cmd->size + count, GFP_KERNEL);
+            char *new_buffer = krealloc(cmd->buffer, cmd->size + count, GFP_KERNEL);
+            if (!new_buffer) {
+                kfree(kernel_buf);
+                mutex_unlock(&aesd_device.device_lock);
+                return -ENOMEM;
+            }
+            cmd->buffer = new_buffer;
             memcpy(cmd->buffer + cmd->size, kernel_buf, count);
             cmd->size += count;
         }
         else {
             cmd->buffer = kmalloc(count, GFP_KERNEL);
+            if (!cmd->buffer) {
+                kfree(kernel_buf);
+                mutex_unlock(&aesd_device.device_lock);
+                return -ENOMEM;
+            }
+            PDEBUG("COMMAND INCOMPLETE : copying kernel_buff=%s to cmd->buffer", kernel_buf);
             memcpy(cmd->buffer, kernel_buf, count);
+            PDEBUG("COMMAND INCOMPLETE : value of cmd->buffer after copy = %s", cmd->buffer);
             cmd->size = count;
         }
         kfree(kernel_buf);
-        mutex_unlock(&aesd_device.device_lock);
-        return cmd->size;
+        retval = count;  // Return bytes from THIS write operation
     }
         
     mutex_unlock(&aesd_device.device_lock);
