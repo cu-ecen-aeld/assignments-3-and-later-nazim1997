@@ -22,7 +22,6 @@
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -31,44 +30,16 @@ MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
 
-struct incomplete_command {
-    char *buffer;
-    size_t size;
-};
-
 int aesd_open(struct inode *inode, struct file *filp)
 {
     PDEBUG("open");
-    /**
-     * TODO: handle open
-     */
-    struct incomplete_command *cmd = kmalloc(sizeof(struct incomplete_command), GFP_KERNEL);
-    if (cmd) {
-        cmd->buffer = NULL;
-        cmd->size = 0;
-        filp->private_data = cmd;
-        return 0;
-    }
-    else {
-        return -ENOMEM;
-    }
-    
+    return 0;  // No per-file data needed with global approach
 }
 
 int aesd_release(struct inode *inode, struct file *filp)
 {
     PDEBUG("release");
-    /**
-     * TODO: handle release
-     */
-    struct incomplete_command *cmd = filp->private_data;
-    if (cmd) {
-        if (cmd->buffer) {
-            kfree(cmd->buffer);
-        }
-        kfree(cmd);
-    }
-    return 0;
+    return 0;  // No per-file cleanup needed
 }
 
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
@@ -76,7 +47,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 {
     ssize_t retval = 0;
     ssize_t total_bytes_read = 0;
-    PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
+    PDEBUG("read %zu bytes with offset %lld", count, *f_pos);
     
     mutex_lock(&aesd_device.device_lock);
     
@@ -115,16 +86,14 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
-    PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
+    PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
     
     mutex_lock(&aesd_device.device_lock);
     char *kernel_buf = kmalloc(count, GFP_KERNEL);
-    struct incomplete_command *cmd = (struct incomplete_command *) filp->private_data;
 
-    if(cmd->buffer) {
-        PDEBUG("CMD BUFFER FULL: previous command is : %s", cmd->buffer);
-    }
-    else {
+    if (aesd_device.incomplete_cmd.buffer) {
+        PDEBUG("CMD BUFFER FULL: previous command is : %s", aesd_device.incomplete_cmd.buffer);
+    } else {
         PDEBUG("CMD BUFFER EMPTY : previous command was empty");
     }
 
@@ -140,73 +109,72 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
         mutex_unlock(&aesd_device.device_lock);
         return -EFAULT;
     }
+    
     PDEBUG("writing string %s to kernel buf", kernel_buf);
+    
     if (memchr(kernel_buf, '\n', count)) {
         PDEBUG("a new line detected");
         // Complete command - add to circular buffer (exclude the newline)
         struct aesd_buffer_entry entry;
         
-        if (cmd->buffer) {
-            PDEBUG("the previous command is not empty and cmd->buffer = %s", cmd->buffer);
-            // Combine accumulated data with current write (excluding newline)
-            entry.buffptr = kmalloc(cmd->size + count - 1, GFP_KERNEL);
+        if (aesd_device.incomplete_cmd.buffer) {
+            PDEBUG("the previous command is not empty and buffer = %s", aesd_device.incomplete_cmd.buffer);
+            // Combine accumulated data with current write (keep the newline)
+            entry.buffptr = kmalloc(aesd_device.incomplete_cmd.size + count, GFP_KERNEL);
             if (!entry.buffptr) {
                 kfree(kernel_buf);
                 mutex_unlock(&aesd_device.device_lock);
                 return -ENOMEM;
             }
-            memcpy((void*)entry.buffptr, cmd->buffer, cmd->size);
-            memcpy((void*)entry.buffptr + cmd->size, kernel_buf, count - 1);  // Exclude newline
-            entry.size = cmd->size + count - 1;  // Exclude newline from size
+            memcpy((void*)entry.buffptr, aesd_device.incomplete_cmd.buffer, aesd_device.incomplete_cmd.size);
+            memcpy((void*)entry.buffptr + aesd_device.incomplete_cmd.size, kernel_buf, count);  // Include newline
+            entry.size = aesd_device.incomplete_cmd.size + count;  // Include newline in size
             
-            kfree(cmd->buffer);
-            cmd->buffer = NULL;
-            cmd->size = 0;
+            kfree(aesd_device.incomplete_cmd.buffer);
+            aesd_device.incomplete_cmd.buffer = NULL;
+            aesd_device.incomplete_cmd.size = 0;
             kfree(kernel_buf);
-        }
-        else {
+        } else {
             PDEBUG("new line but previous command is empty");
-            // Just current write (excluding newline)
-            entry.buffptr = kmalloc(count - 1, GFP_KERNEL);
+            // Just current write (keep the newline)
+            entry.buffptr = kmalloc(count, GFP_KERNEL);
             if (!entry.buffptr) {
                 kfree(kernel_buf);
                 mutex_unlock(&aesd_device.device_lock);
                 return -ENOMEM;
             }
-            memcpy((void*)entry.buffptr, kernel_buf, count - 1);  // Exclude newline
-            entry.size = count - 1;  // Exclude newline from size
+            memcpy((void*)entry.buffptr, kernel_buf, count);  // Include newline
+            entry.size = count;  // Include newline in size
             kfree(kernel_buf);
         }
         
         aesd_circular_buffer_add_entry(aesd_device.buffer, &entry);
-        
         retval = count;  // Return bytes from THIS write operation
-    }
-    else {
+    } else {
         PDEBUG("THIS IS A INCOMPLETE COMMAND NO NEWLINE DETECTED");
         // Incomplete command - accumulate data
-        if (cmd->buffer) {
-            char *new_buffer = krealloc(cmd->buffer, cmd->size + count, GFP_KERNEL);
+        if (aesd_device.incomplete_cmd.buffer) {
+            char *new_buffer = krealloc(aesd_device.incomplete_cmd.buffer, 
+                                      aesd_device.incomplete_cmd.size + count, GFP_KERNEL);
             if (!new_buffer) {
                 kfree(kernel_buf);
                 mutex_unlock(&aesd_device.device_lock);
                 return -ENOMEM;
             }
-            cmd->buffer = new_buffer;
-            memcpy(cmd->buffer + cmd->size, kernel_buf, count);
-            cmd->size += count;
-        }
-        else {
-            cmd->buffer = kmalloc(count, GFP_KERNEL);
-            if (!cmd->buffer) {
+            aesd_device.incomplete_cmd.buffer = new_buffer;
+            memcpy(aesd_device.incomplete_cmd.buffer + aesd_device.incomplete_cmd.size, kernel_buf, count);
+            aesd_device.incomplete_cmd.size += count;
+        } else {
+            aesd_device.incomplete_cmd.buffer = kmalloc(count, GFP_KERNEL);
+            if (!aesd_device.incomplete_cmd.buffer) {
                 kfree(kernel_buf);
                 mutex_unlock(&aesd_device.device_lock);
                 return -ENOMEM;
             }
-            PDEBUG("COMMAND INCOMPLETE : copying kernel_buff=%s to cmd->buffer", kernel_buf);
-            memcpy(cmd->buffer, kernel_buf, count);
-            PDEBUG("COMMAND INCOMPLETE : value of cmd->buffer after copy = %s", cmd->buffer);
-            cmd->size = count;
+            PDEBUG("COMMAND INCOMPLETE : copying kernel_buff=%s to buffer", kernel_buf);
+            memcpy(aesd_device.incomplete_cmd.buffer, kernel_buf, count);
+            PDEBUG("COMMAND INCOMPLETE : value of buffer after copy = %s", aesd_device.incomplete_cmd.buffer);
+            aesd_device.incomplete_cmd.size = count;
         }
         kfree(kernel_buf);
         retval = count;  // Return bytes from THIS write operation
@@ -238,35 +206,38 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
     return err;
 }
 
-
-
 int aesd_init_module(void)
 {
     dev_t dev = 0;
     int result;
-    result = alloc_chrdev_region(&dev, aesd_minor, 1,
-            "aesdchar");
+    result = alloc_chrdev_region(&dev, aesd_minor, 1, "aesdchar");
     aesd_major = MAJOR(dev);
     if (result < 0) {
         printk(KERN_WARNING "Can't get major %d\n", aesd_major);
         return result;
     }
-    memset(&aesd_device,0,sizeof(struct aesd_dev));
+    memset(&aesd_device, 0, sizeof(struct aesd_dev));
 
     /**
      * TODO: initialize the AESD specific portion of the device
      */
+    aesd_device.incomplete_cmd.buffer = NULL;
+    aesd_device.incomplete_cmd.size = 0;
     aesd_device.buffer = kmalloc(sizeof(struct aesd_circular_buffer), GFP_KERNEL);
+    if (!aesd_device.buffer) {
+        unregister_chrdev_region(dev, 1);
+        return -ENOMEM;
+    }
     aesd_circular_buffer_init(aesd_device.buffer);
     mutex_init(&aesd_device.device_lock);
 
     result = aesd_setup_cdev(&aesd_device);
 
-    if( result ) {
+    if (result) {
+        kfree(aesd_device.buffer);
         unregister_chrdev_region(dev, 1);
     }
     return result;
-
 }
 
 void aesd_cleanup_module(void)
@@ -276,19 +247,28 @@ void aesd_cleanup_module(void)
     cdev_del(&aesd_device.cdev);
 
     /**
-     * TODO: cleanup AESD specific poritions here as necessary
+     * TODO: cleanup AESD specific portions here as necessary
      */
-    // Freeing entries from circular buffer
-    char index = 0;
-    struct aesd_buffer_entry *entry;
-    AESD_CIRCULAR_BUFFER_FOREACH(entry, aesd_device.buffer, index) {
-        kfree(entry->buffptr);
+    // Clean up incomplete command if any
+    if (aesd_device.incomplete_cmd.buffer) {
+        kfree(aesd_device.incomplete_cmd.buffer);
     }
+    
+    // Freeing entries from circular buffer
+    if (aesd_device.buffer) {
+        char index = 0;
+        struct aesd_buffer_entry *entry;
+        AESD_CIRCULAR_BUFFER_FOREACH(entry, aesd_device.buffer, index) {
+            if (entry->buffptr) {
+                kfree(entry->buffptr);
+            }
+        }
+        kfree(aesd_device.buffer);
+    }
+    
     mutex_destroy(&aesd_device.device_lock);
     unregister_chrdev_region(devno, 1);
 }
-
-
 
 module_init(aesd_init_module);
 module_exit(aesd_cleanup_module);

@@ -23,6 +23,11 @@
 #  define PDEBUG(fmt, args...) /* not debugging: nothing */
 #endif
 
+struct incomplete_command {
+    char *buffer;
+    size_t size;
+};
+
 struct aesd_dev
 {
     /**
@@ -31,6 +36,7 @@ struct aesd_dev
      struct aesd_circular_buffer *buffer;
      struct mutex device_lock;
      struct cdev cdev;     /* Char device structure      */
+     struct incomplete_command incomplete_cmd;
 };
 
 
