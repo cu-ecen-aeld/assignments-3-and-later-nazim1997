@@ -15,6 +15,10 @@
 #include <pthread.h>
 #include <sys/queue.h>
 
+#ifndef USE_AESD_CHAR_DEVICE
+#define USE_AESD_CHAR_DEVICE 1  // Default to 1
+#endif
+
 #define MAX 80
 #define PORT 9000
 #define SIZE 50
@@ -23,7 +27,12 @@
 volatile sig_atomic_t terminate_flag = false;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
-int aesdsocketdata_fd = -1;
+// Global file path - determined at compile time
+#if USE_AESD_CHAR_DEVICE
+    const char* data_file_path = "/dev/aesdchar";
+#else
+    const char* data_file_path = "/var/tmp/aesdsocketdata";
+#endif
 
 struct thread_node {
     pthread_t thread;     // Store thread ID here
@@ -38,6 +47,7 @@ static void signal_handler(int signal_number) {
     }
 }
 
+#if !USE_AESD_CHAR_DEVICE
 void* timestamp_thread(void* args) {
     time_t t;
     struct tm *tmp;
@@ -56,8 +66,12 @@ void* timestamp_thread(void* args) {
         
         // Write timestamp to file with mutex protection
         pthread_mutex_lock(&mutex);
-        if (write(aesdsocketdata_fd, output_buffer, strlen(output_buffer)) < 0) {
-            perror("Error writing timestamp");
+        int fd = open(data_file_path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) {
+            if (write(fd, output_buffer, strlen(output_buffer)) < 0) {
+                perror("Error writing timestamp");
+            }
+            close(fd);
         }
         pthread_mutex_unlock(&mutex);
         
@@ -67,6 +81,7 @@ void* timestamp_thread(void* args) {
     
     return NULL;
 }
+#endif
 
 void* handle_client(void* args) {
     int connfd = *((int *) args);
@@ -74,6 +89,7 @@ void* handle_client(void* args) {
     char buffer[MAX];
     int bytes_read;
     bool packet_complete = false;
+    int data_fd = -1;
     
     while ((bytes_read = read(connfd, buffer, sizeof(buffer) - 1)) > 0) {
         // Check for newline to determine packet completion
@@ -84,9 +100,24 @@ void* handle_client(void* args) {
             }
         }
         
-        // Write to file with mutex protection
+        // Open file descriptor on first access
         pthread_mutex_lock(&mutex);
-        if (write(aesdsocketdata_fd, buffer, bytes_read) < 0) {
+        if (data_fd == -1) {
+            #if USE_AESD_CHAR_DEVICE
+                data_fd = open(data_file_path, O_RDWR);
+            #else
+                data_fd = open(data_file_path, O_RDWR | O_CREAT | O_APPEND, 0644);
+            #endif
+            
+            if (data_fd == -1) {
+                perror("open failed in handle_client");
+                pthread_mutex_unlock(&mutex);
+                break;
+            }
+        }
+        
+        // Write to file
+        if (write(data_fd, buffer, bytes_read) < 0) {
             perror("writing to file failed");
             pthread_mutex_unlock(&mutex);
             break;
@@ -94,28 +125,45 @@ void* handle_client(void* args) {
         
         // If a complete packet has been received, send the entire file back
         if (packet_complete) {
-            // Reposition to start of file
-            if (lseek(aesdsocketdata_fd, 0, SEEK_SET) < 0) {
-                perror("lseek failed");
-                pthread_mutex_unlock(&mutex);
-                break;
-            }
+            #if USE_AESD_CHAR_DEVICE
+                // For character device, close and reopen to read from beginning
+                close(data_fd);
+                data_fd = open(data_file_path, O_RDONLY);
+                if (data_fd < 0) {
+                    perror("reopen for read failed");
+                    pthread_mutex_unlock(&mutex);
+                    break;
+                }
+            #else
+                // For regular file, seek to beginning
+                if (lseek(data_fd, 0, SEEK_SET) < 0) {
+                    perror("lseek failed");
+                    pthread_mutex_unlock(&mutex);
+                    break;
+                }
+            #endif
             
             // Read and send entire file
             int read_bytes;
-            while ((read_bytes = read(aesdsocketdata_fd, buffer, sizeof(buffer) - 1)) > 0) {
+            while ((read_bytes = read(data_fd, buffer, sizeof(buffer) - 1)) > 0) {
                 if (write(connfd, buffer, read_bytes) < 0) {
                     perror("writing to socket failed");
                     break;
                 }
             }
             
-            // Return to end of file for next writes
-            if (lseek(aesdsocketdata_fd, 0, SEEK_END) < 0) {
-                perror("lseek failed");
-                pthread_mutex_unlock(&mutex);
-                break;
-            }
+            #if USE_AESD_CHAR_DEVICE
+                // For character device, close and reopen for writing
+                close(data_fd);
+                data_fd = open(data_file_path, O_WRONLY);
+            #else
+                // Return to end of file for next writes
+                if (lseek(data_fd, 0, SEEK_END) < 0) {
+                    perror("lseek failed");
+                    pthread_mutex_unlock(&mutex);
+                    break;
+                }
+            #endif
             
             packet_complete = false;
         }
@@ -127,6 +175,9 @@ void* handle_client(void* args) {
         perror("read failed");
     }
     
+    if (data_fd >= 0) {
+        close(data_fd);
+    }
     close(connfd);
     return NULL;
 }
@@ -138,7 +189,9 @@ int main(int argc, char **argv) {
     struct sigaction sa;
     int daemon_mode = 0;
     int c;
-    pthread_t timestamp_thread_id;
+    #if !USE_AESD_CHAR_DEVICE
+        pthread_t timestamp_thread_id;
+    #endif
     
     // Initialize the singly linked list
     SLIST_INIT(&head);
@@ -154,18 +207,10 @@ int main(int argc, char **argv) {
         if (c == 'd') daemon_mode = 1;
     }
 
-    // Open the data file
-    aesdsocketdata_fd = open("/var/tmp/aesdsocketdata", O_RDWR | O_CREAT | O_APPEND | O_TRUNC, 0644);
-    if (aesdsocketdata_fd == -1) {
-        perror("open failed");
-        exit(EXIT_FAILURE);
-    }
-
     // Create socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
         perror("socket creation failed");
-        close(aesdsocketdata_fd);
         exit(EXIT_FAILURE);
     }
 
@@ -174,7 +219,6 @@ int main(int argc, char **argv) {
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
         perror("setsockopt failed");
         close(sockfd);
-        close(aesdsocketdata_fd);
         exit(EXIT_FAILURE);
     }
 
@@ -188,7 +232,6 @@ int main(int argc, char **argv) {
     if (bind(sockfd, (struct sockaddr *)&server_address, sizeof(server_address)) == -1) {
         perror("bind failed");
         close(sockfd);
-        close(aesdsocketdata_fd);
         exit(EXIT_FAILURE);
     }
 
@@ -196,7 +239,6 @@ int main(int argc, char **argv) {
     if (listen(sockfd, 5) == -1) {
         perror("listen failed");
         close(sockfd);
-        close(aesdsocketdata_fd);
         exit(EXIT_FAILURE);
     }
 
@@ -206,7 +248,6 @@ int main(int argc, char **argv) {
         if (pid < 0) {
             perror("fork failed");
             close(sockfd);
-            close(aesdsocketdata_fd);
             exit(EXIT_FAILURE);
         }
         else if (pid > 0) {
@@ -221,13 +262,14 @@ int main(int argc, char **argv) {
         close(STDERR_FILENO);
     }
 
-    // Start timestamp thread
-    if (pthread_create(&timestamp_thread_id, NULL, timestamp_thread, NULL) != 0) {
-        perror("Timestamp thread creation failed");
-        close(sockfd);
-        close(aesdsocketdata_fd);
-        exit(EXIT_FAILURE);
-    }
+    #if !USE_AESD_CHAR_DEVICE
+        // Start timestamp thread only for regular file mode
+        if (pthread_create(&timestamp_thread_id, NULL, timestamp_thread, NULL) != 0) {
+            perror("Timestamp thread creation failed");
+            close(sockfd);
+            exit(EXIT_FAILURE);
+        }
+    #endif
 
     // Main server loop
     while (!terminate_flag) {
@@ -296,8 +338,10 @@ int main(int argc, char **argv) {
     // Cleanup when exiting
     close(sockfd);
 
-    // Join timestamp thread
-    pthread_join(timestamp_thread_id, NULL);
+    #if !USE_AESD_CHAR_DEVICE
+        // Join timestamp thread
+        pthread_join(timestamp_thread_id, NULL);
+    #endif
 
     // Join all client threads
     struct thread_node *node;
@@ -308,9 +352,10 @@ int main(int argc, char **argv) {
         free(node);
     }
 
-    // Close and remove data file
-    close(aesdsocketdata_fd);
-    unlink("/var/tmp/aesdsocketdata");
+    #if !USE_AESD_CHAR_DEVICE
+        // Only remove regular file, not character device
+        unlink(data_file_path);
+    #endif
     
     syslog(LOG_INFO, "Caught signal, exiting");
     return EXIT_SUCCESS;
